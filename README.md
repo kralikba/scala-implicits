@@ -328,6 +328,18 @@ scala> implicitly[Descendant[Joe, Joshua]]
               implicitly[Descendant[Joe, Joshua]]
 ```
 
+### The last item
+
+In the previous section, we managed to decide whether two people are direct descendants of one other or not. But what if we are interested in something more open-ended - such as: who is the furthest known forefather of a given person? Let's see what a query on descendants returns:
+
+```scala
+scala> def descQuery[D,A](dm : Manifest[D])(implicit da : Desc[D,A]) = da
+scala> descQuery(manifest[Joshua])
+res0: Desc[Joshua,Joe] = Desc@4874bec5
+```
+
+The compiler notices that there is an implicit, which does not require resolving further implicits - thus this first possible solution is the solution. We would need to express somehow, that 
+
 ---
 
 _This concludes the body of the tutorial. Have fun and share your interesting implicit metaprograms!_
