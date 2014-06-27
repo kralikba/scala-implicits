@@ -180,7 +180,7 @@ Unfortunately this is not the case:
                      ^
 ```
 
-Scala expects us to either specify all type parameters exactly or leave the inference of all of them to the compiler. So we need to give an explicit hint about the `S` without too much overhead. For example, we could pass the ˙Manifest` of the type in question as an explicit parameter.
+Scala expects us to either specify all type parameters exactly or leave the inference of all of them to the compiler. So we need to give an explicit hint about the `S` without too much overhead. For example, we could pass the `Manifest` of the type in question as an explicit parameter.
 
 > #### Manifests
 
@@ -197,6 +197,8 @@ res1: Manifest[Johann] = Johann
 scala> manifest[Johann]
 res2: Manifest[Johann] = Johann
 ```
+
+> The non-deprecated way is to use `TypeTag`s but that would introduce unnecessary complexity to this tutorial.
 
 We can thus define a function which is practically a compile-time query:
 
@@ -232,7 +234,7 @@ scala> fatherOf(manifest[Johann])
               fatherOf(manifest[Johann])
 ```
 
-In Scala, type inference is done left-to-right, in the order of arguments. Furthermore, it is done eagerly - if at some point, we only have a wild guess about some unknown type parameter, this wild guess would be considered as its concrete value for the rest of the expression.
+In Scala, type inference is done left-to-right, in the order of the parameters. Furthermore, it is done eagerly - if at some point, we only have a wild guess about some unknown type parameter, this wild guess would be considered as its concrete value for the rest of the expression.
 
 In this concrete case, nothing is known about `F` when first encountering it. Scala will then look for the most special type for which `Manifest[X]` is implicitly instantiable. `Nothing` is the subtype of all types in Scala, thus `F` will be considered to be `Nothing`. When encountering `ev`, it won't be able to find an implicit value for `Son[Johann, Nothing]`, thus implicit resolution fails.
 
@@ -338,7 +340,36 @@ scala> descQuery(manifest[Joshua])
 res0: Desc[Joshua,Joe] = Desc@4874bec5
 ```
 
-The compiler notices that there is an implicit, which does not require resolving further implicits - thus this first possible solution is the solution. We would need to express somehow, that 
+The compiler notices that there is an implicit, which does not require resolving further implicits - thus this first possible solution is _the_ solution. We would need to express somehow, that the recursion should only be stopped when there is no possibility to continue it. For example, we could say that the base case is when there is an appropriate `Son[D,A]` but there is no appropriate `Son[D,_]`.
+
+Observe the usage of the wildcard type. `implicit e : Son[F,_]` means that _there exists some `X`, for which an implicit `Son[F,X]` exists_.
+
+
+```scala
+class Forefather[D,A]
+
+implicit def next[D,C,A]
+  (implicit s : Son[D,C], d : Forefather [C,A])
+  = new Forefather[D,A]
+
+implicit def last[D,A]
+  (implicit s : Son[D,A],
+   n : Not[Son[A,_]]) = new Forefather [D,A]
+```
+
+#### Negation
+
+Unfortunately, Scala has only minimal support for implicit metaprogramming; thus, we ourselves have to implement `Not[X]` as an implicit metafunction.
+
+The most straightforward way to tell Scala to abandon trying to instantiate a generic implicit for a given type parameter is to create ambiguity. This will let it still explore other possiblities, if not that specific instantiation was top-level. We can exploit this by making `Not[X]` such that it can unambiguously instantiated implicitly only iff `X` cannot be instantiated implicitly.
+
+```scala
+class Not[X]
+object {
+  implicit def always[X] = new Not[X]
+  implicit def never[X](implicit x : X) = new Not[X]
+}
+```
 
 ---
 
