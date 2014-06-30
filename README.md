@@ -1,19 +1,21 @@
 #Implicit metaprogramming in Scala
 
-[TOC "float:right"]
+{toc}
 
 This is a short tutorial-like text based on my talk on abusing Scala's type inference & implicit resolution algorithms so that we get a kind of compile-time, type-level metaprogramming that resembles logic programming. The tutorial assumes that the reader has some basic knowledge about the Scala language and generics. If you already know about implicits, you could as well skip the first chapter. Knowledge of logic programming is not required, but on the long run, useful.
 
 Firing up a Scala interpreter and playing around with the code snippets is deemed a good idea by 9 out of 10 Scala experts. Do note that in the interpreter, classes and their companion objects have to be input in the same go. For this, using `:paste` is recommended.
 
+Note: "iff" does not equal "if". I use with the meaning of "if, and only if".
+
 ---
 
-This text is loosely based on Scala 2.11.1. There might be statements which do not reflect the current language standard (be it the one at the time of writing or something newer). Please notify the author if You find any discrepancies between this tutorial and reality. Thanks.
+This text is loosely based on Scala 2.10.4. There might be statements which do not reflect the current language standard (be it the one at the time of writing or something newer). Please notify the author if You find any discrepancies between this tutorial and reality. Thanks.
 
 Any other comments are also warm-heartedly welcome (e.g. "I think topic X should not be left out", "paragraph X should be left out", "warm-heartedly is not a word of the English language", "code snippets should not contain the noise of the scala console", etc.)
 
 
-Copyright 2014, Barnabás Králik. Distributed under the 2-clause BSD license. The author can be reached at kralikba*__at__*elte*__dot__*hu.
+Copyright 2014, Barnabás Králik. Distributed under the 2-clause BSD license. The author can be reached at kralikba at elte dot hu.
 
 Greets go out to the [Vienna Scala User Group](http://github.com/scala-vienna).
 
@@ -21,7 +23,7 @@ Greets go out to the [Vienna Scala User Group](http://github.com/scala-vienna).
 
 ## A primer on implicits
 
-In Scala, functions may have multiple formal parameter lists. The last - and possibly only - one may be marked `implicit`. By this, we tell the Scala compiler to try to automatically find a value of the given type. Eligible are those `val`s and `def`s without explicit parameters that are marked `implicit`.  
+In Scala, functions may have multiple formal parameter lists. The last - and possibly only - one may be marked `implicit`. By this, we tell the Scala compiler to try to automatically find a value of the given type. Eligible are those `val`s and `def`s without explicit parameters that are marked `implicit`. 
 
 ```scala
 scala> def f(x : Int)(implicit b : Int) = x * b
@@ -335,9 +337,9 @@ scala> implicitly[Descendant[Joe, Joshua]]
 In the previous section, we managed to decide whether two people are direct descendants of one other or not. But what if we are interested in something more open-ended - such as: who is the furthest known forefather of a given person? Let's see what a query on descendants returns:
 
 ```scala
-scala> def descQuery[D,A](dm : Manifest[D])(implicit da : Desc[D,A]) = da
+scala> def descQuery[D,A](dm : Manifest[D])(implicit da : Descendant[D,A]) = da
 scala> descQuery(manifest[Joshua])
-res0: Desc[Joshua,Joe] = Desc@4874bec5
+res0: Descendant[Joshua,Joe] = Desc@4874bec5
 ```
 
 The compiler notices that there is an implicit, which does not require resolving further implicits - thus this first possible solution is _the_ solution. We would need to express somehow, that the recursion should only be stopped when there is no possibility to continue it. For example, we could say that the base case is when there is an appropriate `Son[D,A]` but there is no appropriate `Son[D,_]`.
@@ -365,15 +367,242 @@ The most straightforward way to tell Scala to abandon trying to instantiate a ge
 
 ```scala
 class Not[X]
-object {
+object Not {
   implicit def always[X] = new Not[X]
   implicit def never[X](implicit x : X) = new Not[X]
 }
 ```
 
+## A practical example
+
+Up till now, our examples were mostly toy examples. You might have asked - who on Earth would want to do graph algorithms on regular data using type-level metaprogramming. This question is left open.
+
+In this section, we will see how a tuple of functions could be transformed into a function on tuples.
+I.e. Instead of `(f(a),g(b),h(c),...)` we wish to use `(f,g,h,...)(a,b,c...)` and get the same result.
+
+### Tuples and heterogeneous lists
+
+In Scala, there is a handy feature: we have anonymous types and an easy-to-use syntax for cross products of an arbitrary number of types. (actually, at most 22 without manual intervention). These are called tuples and are represented by the generic types `Tuple1[T1], Tuple2[T1,T2], ..., Tuple22[T1,T2, ..., T22]`.
+
+Scala even provides a trait to treat them and other types, such as case classes, uniformly: `Product`. Its two most important members are `def productArity: Int`, which returns the current item's arity (number of members); the other one is `def productElement(n : Int) : Any`, which returns the value of the *n*th item. This could easily be used to convert our tuple of functions into a function of tuples, but as `productElement` does not give any static information about the types of the items, we lose compile-time type safety. As in many cases, this is our main motivation for doing compile-time metaprogramming; to introduce advanced features without compromising static type safety.
+
+To be able to treat tuples uniformly and keep type safety, we use _heterogeneous lists_ (or HLists in some literature). These are fixed-length linked lists the members of which are of different types, yet these types are statically known.
+
+A simplest definition of heterogeneous lists would be:
+```scala
+sealed trait HList
+case class C[H, T <: HList](hd : H, tl : T) extends HList
+case object N extends HList
+```
+
+For example, a 3-tuple of an `Int`, a `String` and a `Boolean` could be represented as:
+```scala
+C[Int, C[String, C[Boolean, N.type]]]
+```
+
+Also, type inference works well:
+```scala
+scala> C(5, C("5", C(false, N)))
+res0: C[Int,C[String,C[Boolean,N.type]]] = C(5,C(5,C(false,N)))
+```
+
+Do note, that due to the type signature containing the type of each item, one-by-one, the signature itself defines the length of the list. (You might ask: why use `N.type`. `N` is an `object`, thus the name `N` refers to an actual value, which is the singleton instance of an unnamed type. Thus, we can only indirectly refer to its type, e.g. using the expression `N.type`)
+
+### Zip on types
+
+Let us play around a bit with heterogeneous lists. Take the `zip` function. This takes two lists of equal lengths and produces a third list of pairs, so that the result list's *n*th item is the pair of the two input lists' *n*th items. This could be defined for example in the following manner in Scala:
+
+```scala
+def zip[A,B](a : List[A], b : List[B]) : List[(A,B)]
+    = (a,b) match {
+      case (x :: xs, y :: ys) => (x,y) :: zip(xs, ys)
+      case (Nil, Nil) => Nil
+    }
+```
+
+This function throws a run-time exception if the lists are of different lengths - as the length of `List[_]`s is unknown at compile time. How do we make this type safe at compile time?
+
+We can introduce an implicit metafunction, which works on heterogeneous lists, of course. At first, let us just compute the type of the output. Let us denote this `Zip[A,B,R]`, where `A` and `B` are the inputs' types and R is the result's type.
+
+```scala
+class Zip[A <: HList, B <: HList, R <: HList]
+```
+
+In terms of logic programming, the above can be considered a statement: iff zipping two heterogeneous lists of type A and B results in a list of type R, then `Zip` can be implicitly instantiated as `Zip[A,B,R]`.
+
+The base case is when both input lists are empty:
+
+```scala
+implicit val nilcase = new Zip[N.type, N.type, N.type]
+```
+
+The recursive case is when the input lists are both non-empty. Then, the current output type will be a pair of these input lists' heads' types; the current output value a pair of the respective items.
+
+```scala
+implicit def reccase[X, XS <: HList, Y, YS <: HList, ZS <: HList]
+    (implicit z : Zip[XS, YS, ZS])
+    = new Zip[C[X, XS], C[Y, YS], C[(X,Y), ZS]]
+```
+
+`X` and `Y` denote the heads' types; `XS` and `YS` denote the tails'. `ZS` denotes the resulting list's tail, which is computed by the compiler when looking for an appropriate implicit value for `z`. The essence of the implicit above can be read out loud as:
+
+*If zipping the heterogeneous lists of types `XS` and `YS` yields one of type `ZS`, then zipping two lists, the first elements of which are of types `X` and `Y`, and the remaining parts of which are of type `XS` and `YS`, respectively, yields a list, the first element of which is a pair of `X` and `Y` and the remaining part of which is `ZS`.*
+
+We can test this using a function that is similar to what we have used in the previous sections:
+
+```scala
+def f[A,B,R](a : Manifest[A], b : Manifest[B])
+            (implicit z : Zip[A,B,R], r : Manifest[R])
+            = r
+```
+
+```scala
+scala> f(manifest[C[String, C[Int, N.type]]], manifest[C[Int, C[Boolean, N.type]]])
+```
+
+```scala
+```
+### Zip on values as well
+
+We already have a correct type for the zipped list; let us now associate a value to it! Our goal is to be able to write something along the lines of the following expression
+
+```scala
+scala> Zip(C("5", C(5, N)), C(true, C(9.0f, N)))
+```
+
+and receive a well-typed and correct answer:
+
+```scala
+res0: C[(String, Boolean), C[(Int, Float), N.type]] = C((5,true), C((5, 9.0), N))
+```
+
+(And of course, receive a compilation error for lists of different lengths.)
+
+As we have seen, `implicit`s may depend on type parameters - but they cannot depend on values. Up till now, we did not care too much about the actual value of the implicits - only their type. But that does not need to stay so. We can return arbitrary values of the given type. For example, instead of a simple placeholder `class Zip`, we can have one such class, that has a member that does the actual zipping
+
+```scala
+abstract class Zip[A,B,R] {
+  def do_zip(a : A, b : B) : R
+}
+```
+
+and define such implicits that implement this abstract method. (Do put them in the companion objects in real code!)
+
+The base case is that of empty lists:
+```scala
+implicit val basecase = new Zip[N.type, N.type, N.type] {
+        def do_zip(n1 : N.type, n2 : N.type) = N
+    }
+```
+
+The recursive case doesn't simply do a recursive call, but receives the appropriate implicit `Zip` for the remainder of the list. It creates a tuple of the heads at first. Then, it calls this instance's `do_zip` method for zipping the remainder of the lists.
+```scala
+implicit def reccase[X, XS <: HList, Y, YS <: HList, ZS <: HList]
+         (implicit z : Zip[XS, YS, ZS])
+         = new Zip[C[X, XS], C[Y, YS], C[(X,Y), ZS]] {
+             def do_zip(c1 : C[X, XS], c2 : C[Y,YS]) =
+                 C((c1.hd, c2.hd), z.do_zip(c1.tl, c2.tl))
+         }
+```
+
+Now, we can define an auxiliary function which can be used without explicit type parameters for zipping heterogeneous lists:
+
+```scala
+def apply[A <: HList, B <: HList, R <: HList](a : A, b : B)(implicit z : Zip[A,B,R]) : R = z.do_zip(a,b)
+```
+
+If we define this inside the companion object of `Zip`, we will be able to use it as a function object, and thus use the function literal syntax we have set sight upon. Let's check that the results are as expected for correct input
+
+```scala
+scala> Zip(C(5, C(9.0f, N)), C("5", C(true, N)))
+res0: C[(Int, String),C[(Float, Boolean),N.type]] = C((5,5),C((9.0,true),N))
+```
+
+and for incorrect input as well:
+```scala
+scala> Zip(C(5, C(9.0f, N)), C("5", N))
+<console>:14: error: could not find implicit value for parameter z: Zip[C[Int,C[Float,N.type]],C[String,N.type],R]
+              Zip(C(5, C(9.0f, N)), C("5", N))
+                 ^
+```
+
+### From lists of functions to functions of lists
+
+Now, we have nearly everything on our toolbelt for reaching our set goal. Let us begin by defining an abstract type for such transformations:
+
+```scala
+@scala.annotation.implicitNotFound("${I} contains types other than that of functions with exactly one parameter")
+abstract class LF2FL[I <: HList, F] {
+  def transform(input : I) : F
+}
+```
+
+Note the annotation. Its effect on the compilation is that it will make `could not find implicit` messages for the annotated type more user friendly. It can even contain references to the type parameters which are then substituted with concrete types if known - here we only have a reference to `I`.
+
+`I` will be a heterogeneous list. Implicits will only exist for lists which fit the above criteria of only having items of arity-one functions.
+
+`F` will be a function from lists to lists. Its bounds should be `>: HList => Nothing <: Nothing => HList`. Remember the subtyping law for functions: iff `A <: C` and `B >: D`, then `A => B <: C => D`. Unfortunately, specifying these bounds explicitly prevents implicit resolution from working. Still, implicit metaprogramming will yield us types conforming to these bounds.
+
+The base case is that of empty lists, of course:
+```scala
+implicit val basecase
+  = new LF2FL[N.type, N.type => N.type] {
+      def transform(n : N.type) = _ => N
+    }
+```
+
+The recursive case is similar to the inverse of `Zip`. Just replace the ordered pair's (`Tuple2`) type and data constructors with those of the arity-one function (`=>` or `Function1`)!
+```scala
+implicit def reccase
+  [X, Y, XS <: HList, YS <: HList, L <: HList]
+  (implicit r : LF2FL[XS => YS, L])
+  = new LF2FL[C[X => Y, L], C[X, XS] => C[Y, YS]] {
+      def transform(c : C[X => Y, L]) =
+        i : C[X,XS] => C(c.hd(i.hd), r.transform(c.tl)(i.tl))
+    }
+```
+
+Let us now introduce an appropriate helper function
+```scala
+def apply[I <: HList, F]
+    (i : I)
+    (implicit lf2fl : LF2FL[I, F])
+    : F
+    = lf2fl.transform(i)
+```
+
+If the above functions are correctly placed inside the companion object of `LF2FL`, we can observe expected functionality for both incorrect and correct inputs:
+
+```scala
+scala> LF2FL(N)
+res0: N.type => N.type = <function1>
+
+scala> res0(N)
+res1: N.type = N
+
+scala> LF2FL(C(Int, C(f, N)))
+<console>:17: error: C[Int.type,C[Int => String,N.type]] contains types other than that of functions with exactly one parameter
+              LF2FL(C(Int, C(f, N)))
+                   ^
+
+scala> LF2FL(C(f, C(g, C(h, N))))
+res3: C[Int,C[String,C[Float,N.type]]] => C[String,C[Int,C[Boolean,N.type]]] = <function1>
+
+scala> res3(C(1,C("1", C(10.0f,N))))
+res4: C[String,C[Int,C[Boolean,N.type]]] = C(1,C(1,C(true,N)))
+```
+
+(Let us define `f`, `g` and `h` such that
+```scala
+val f = (_:Int).toString
+val g = (_:String).toInt
+val h = (_:Float) > 0.0f
+```
+)
+
 ---
 
-_This concludes the body of the tutorial. Have fun and share your interesting implicit metaprograms!_
+_This concludes the body of the tutorial. Happy hacking!_
 
 ---
 
@@ -458,7 +687,7 @@ scala> implicitly[A]
 
 #### User-friendly `could not find implicit`
 
-Annotating a type with `scala.annotation.implicitNotFound(String)` results in nicer messages if implicit resolution cannot find any matching values for a given type. If the type is generic, type parameters' actual values may be included by name in the message by escaping them as ${TypeParamName} in the error message.
+Annotating a type with `scala.annotation.implicitNotFound(String)` results in nicer messages if implicit resolution cannot find any matching values for a given type. If the type is generic, type parameters' actual values may be included by name in the message by escaping them as `${TypeParamName}` in the error message.
 
 ```scala
 scala> import scala.annotation.implicitNotFound
@@ -540,9 +769,9 @@ fatherOf: [S, F](sonType: Manifest[S])(implicit evidence$1: Manifest[F], implici
 
 Thus, the type inference algorithm, working eagerly from left to right, will deduce that `F` is `Nothing` and thus not work as expected.
 
-#### There isn't a Prolog in your Scala
+#### There is no Prolog in your Scala
 
-As much as we would love it, full-blown logic programming cannot be done directly using implicits. This is due to the way Scala handles ambiguities. In Prolog, it is perfectly OK to have multiple positive answers to a query. Scala, on the other hand, terminates search and backtracks as soon as an ambiguity is found - even if that means only nominal ambiguity and the values are in fact, the same.
+As much as we would love it, full-blown logic programming cannot be done directly using implicit metaprogramming. This is due to the way Scala handles ambiguities. In Prolog, it is perfectly OK to have multiple positive answers to a query. Scala, on the other hand, terminates search and backtracks as soon as an ambiguity is found - even if that means only nominal ambiguity and the values are in fact, the same.
 
 Take for example the following example:
 
@@ -597,7 +826,3 @@ scala> father(manifest[Joe])
 As the Scala compiler is trying to deduce a possible concrete type for `F`, the first (leftmost) expression encountered is `Son[Joe, F]`. As this in itself is ambiguous, implicit resolution fails. `Male[F]` is not even tried.
 
 If we switch the order of the parameters, something similar happens as there are multiple known males.
-
-
-
-
