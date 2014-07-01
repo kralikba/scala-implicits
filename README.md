@@ -458,10 +458,14 @@ def f[A,B,R](a : Manifest[A], b : Manifest[B])
 
 ```scala
 scala> f(manifest[C[String, C[Int, N.type]]], manifest[C[Int, C[Boolean, N.type]]])
+res0: Manifest[C[(String, Int),C[(Int, Boolean),N.type]]] = C[scala.Tuple2[java.lang.String, Int], C[scala.Tuple2[Int, Boolean], N.type]]
+
+scala> f(manifest[C[String, C[Int, N.type]]], manifest[C[Int, N.type]])
+<console>:22: error: could not find implicit value for parameter z: Zip[C[String,C[Int,N.type]],C[Int,N.type],R]
+              f(manifest[C[String, C[Int, N.type]]], manifest[C[Int, N.type]])
+               ^
 ```
 
-```scala
-```
 ### Zip on values as well
 
 We already have a correct type for the zipped list; let us now associate a value to it! Our goal is to be able to write something along the lines of the following expression
