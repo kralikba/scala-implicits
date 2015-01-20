@@ -150,7 +150,7 @@ represents that Joshua is the son of Joe, who is the son of Johann, who is in tu
 Now, we can define a following function:
 
 ```scala
-def sonOf[S,F](implicit ev : Son[S,F]) = r
+def sonOf[S,F](implicit ev : Son[S,F]) = ev
 ```
 
 Observe, that not the result or callability, but already the compilability of a function call with a given `S,F` pair correspond to a truth value - whether `S` is the son of `F` or not:
